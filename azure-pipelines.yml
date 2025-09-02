@@ -29,6 +29,10 @@ steps:
     --no-build
     --logger "trx"
   displayName: 'dotnet test'
+  env:
+    ASPNETCORE_ENVIRONMENT: CI
+    ASPNETCORE_URLS: http://localhost:5000
+
 
 - task: PublishTestResults@2
   displayName: 'Publish test results (TRX)'
