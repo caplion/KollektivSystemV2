@@ -1,9 +1,9 @@
-# ASP.NET Core
-# Build and test ASP.NET Core projects targeting .NET Core.
-# Add steps that run tests, create a NuGet package, deploy, and more:
-# https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
+# ASP.NET Core – Build, Test, Pack, Publish (Azure DevOps)
 
 trigger:
+- main
+
+pr:
 - main
 
 pool:
@@ -11,7 +11,95 @@ pool:
 
 variables:
   buildConfiguration: 'Release'
+  # Sett disse til dine prosjekter (relativt til repo-roten)
+  webProject: 'src/WebApp/WebApp.csproj'
+  # Komma-separert liste over lib-prosjekter som skal pakkes
+  packProjects: 'src/MyLib/MyLib.csproj'
+  artifactsFolder: 'artifacts'
 
 steps:
-- script: dotnet build --configuration $(buildConfiguration)
+# (Valgfritt) Bruk spesifikk .NET SDK
+- task: UseDotNet@2
+  displayName: 'Use .NET SDK 8.x'
+  inputs:
+    packageType: 'sdk'
+    version: '8.x'
+
+# Cache av NuGet-pakker for raskere bygg
+- task: Cache@2
+  displayName: Cache NuGet
+  inputs:
+    key: 'nuget | "$(Agent.OS)" | **/packages.lock.json, **/*.csproj'
+    restoreKeys: |
+      nuget | "$(Agent.OS)"
+    path: ~/.nuget/packages
+
+# Restore
+- script: dotnet restore
+  displayName: 'dotnet restore'
+
+# Build (uten restore)
+- script: dotnet build --configuration $(buildConfiguration) --no-restore
   displayName: 'dotnet build $(buildConfiguration)'
+
+# Test (uten build) + code coverage + TRX
+- script: >
+    dotnet test
+    --configuration $(buildConfiguration)
+    --no-build
+    --logger "trx"
+    --collect:"XPlat Code Coverage"
+  displayName: 'dotnet test (+coverage)'
+
+# Publiser testresultater til Azure DevOps
+- task: PublishTestResults@2
+  displayName: 'Publish test results (TRX)'
+  inputs:
+    testResultsFormat: 'VSTest'
+    testResultsFiles: '**/TestResults/**/*.trx'
+    searchFolder: '$(System.DefaultWorkingDirectory)'
+    mergeTestResults: true
+    testRunTitle: 'Unit Tests'
+
+# Publiser code coverage (Cobertura)
+- task: PublishCodeCoverageResults@1
+  displayName: 'Publish code coverage'
+  inputs:
+    codeCoverageTool: 'Cobertura'
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/coverage.cobertura.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/**/TestResults'
+    failIfCoverageEmpty: false
+
+# Web publish (lager self-contained artefakt for deploy)
+- script: >
+    dotnet publish $(webProject)
+    --configuration $(buildConfiguration)
+    --no-build
+    --output $(Build.SourcesDirectory)/$(artifactsFolder)/web
+  displayName: 'dotnet publish WebApp'
+
+# Pakke NuGet for angitte prosjekter (kjøres alltid; push er betinget)
+- ${{ each proj in split(variables['packProjects'], ',') }}:
+  - script: >
+      dotnet pack ${{ trim(proj) }}
+      --configuration $(buildConfiguration)
+      --no-build
+      --output $(Build.SourcesDirectory)/$(artifactsFolder)/nuget
+    displayName: 'dotnet pack ${{ trim(proj) }}'
+
+# Publiser artefakter (web + nupkg) til pipeline
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish build artifacts'
+  inputs:
+    PathtoPublish: '$(Build.SourcesDirectory)/$(artifactsFolder)'
+    ArtifactName: 'drop'
+    publishLocation: 'Container'
+
+# Push til NuGet **kun** når bygget trigges av et tag som starter med v (f.eks. v1.2.3)
+- script: >
+    dotnet nuget push "$(Build.SourcesDirectory)/$(artifactsFolder)/nuget/*.nupkg"
+    --api-key $(NUGET_API_KEY)
+    --source https://api.nuget.org/v3/index.json
+    --skip-duplicate
+  displayName: 'NuGet push (on tag v*)'
+  condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/v'))
