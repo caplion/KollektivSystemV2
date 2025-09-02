@@ -1,3 +1,7 @@
+using Microsoft.VisualStudio.TestPlatform.TestHost;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Hosting;
+
 namespace KollektivSystem.Tests;
 
 public class WebTests
@@ -5,22 +9,19 @@ public class WebTests
     [Fact]
     public async Task GetWebResourceRootReturnsOkStatusCode()
     {
-        // Arrange
-        var appHost = await DistributedApplicationTestingBuilder.CreateAsync<Projects.KollektivSystem_AppHost>();
-        appHost.Services.ConfigureHttpClientDefaults(clientBuilder =>
-        {
-            clientBuilder.AddStandardResilienceHandler();
-        });
-        // To output logs to the xUnit.net ITestOutputHelper, consider adding a package from https://www.nuget.org/packages?q=xunit+logging
 
-        await using var app = await appHost.BuildAsync();
-        var resourceNotificationService = app.Services.GetRequiredService<ResourceNotificationService>();
-        await app.StartAsync();
+        // Arrange – bruk WebApplicationFactory til å hoste appen i minnet
+        await using var factory =
+            new WebApplicationFactory<Program>()
+                .WithWebHostBuilder(builder =>
+                {
+                    builder.UseEnvironment("CI"); // matcher env i pipeline
+                });
+
+        var client = factory.CreateClient();
 
         // Act
-        var httpClient = app.CreateHttpClient("webfrontend");
-        await resourceNotificationService.WaitForResourceAsync("webfrontend", KnownResourceStates.Running).WaitAsync(TimeSpan.FromSeconds(30));
-        var response = await httpClient.GetAsync("/");
+        var response = await client.GetAsync("/");
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
